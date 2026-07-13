@@ -424,7 +424,8 @@ export async function syncDiscord(
         .prepare("SELECT key FROM sync_state WHERE key LIKE 'backlink:%'")
         .all<{ key: string }>(),
       db
-        .prepare("SELECT key FROM sync_state WHERE key LIKE 'content:v2:%'")
+        .prepare("SELECT key FROM sync_state WHERE key LIKE ?")
+        .bind(CONTENT_FORMAT_STATE_PREFIX + "%")
         .all<{ key: string }>(),
     ]);
     const existing = new Map(existingRows.results.map((row) => [row.id, row.last_message_id]));
