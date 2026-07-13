@@ -78,7 +78,7 @@ export interface SyncResult {
 
 const DISCORD_API = "https://discord.com/api/v10";
 const DISCORD_EPOCH = 1420070400000n;
-const CONTENT_FORMAT_STATE_PREFIX = "content:v4:";
+const CONTENT_FORMAT_STATE_PREFIX = "content:v5:";
 const IMAGE_CONTENT_TYPES = new Set([
   "image/avif",
   "image/gif",
@@ -630,7 +630,7 @@ export async function syncDiscord(
               "INSERT INTO messages (id, thread_id, author_id, author_name, author_avatar, content, created_at, edited_at, attachments_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(
-              message.id,
+              thread.id + ":" + message.id,
               thread.id,
               message.author.id,
               message.author.global_name || message.author.username,

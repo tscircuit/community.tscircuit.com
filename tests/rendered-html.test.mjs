@@ -47,7 +47,8 @@ test("includes durable indexing and automatic Discord refresh", async () => {
   assert.match(discord, /DISCORD_SOURCE_CHANNEL_NAMES/);
   assert.match(discord, /THREAD_MAX_AGE_DAYS/);
   assert.match(discord, /fetchOriginalMessage/);
-  assert.match(discord, /content:v4:/);
+  assert.match(discord, /content:v5:/);
+  assert.match(discord, /thread\.id \+ ":" \+ message\.id/);
   assert.match(discord, /storeImageAttachments/);
   assert.match(worker, /discord-attachments/);
   assert.match(threadPage, /attachmentImage/);
