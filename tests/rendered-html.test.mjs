@@ -43,6 +43,7 @@ test("includes durable indexing and automatic Discord refresh", async () => {
   assert.match(discord, /AnswerOverflow/);
   assert.match(discord, /postBacklink/);
   assert.match(discord, /DISCORD_SOURCE_CHANNEL_NAMES/);
+  assert.match(discord, /THREAD_MAX_AGE_DAYS/);
   assert.match(llms, /Server-rendered discussions/);
   assert.match(rawThread, /text\/plain/);
   assert.match(migration, /CREATE TABLE .threads./);

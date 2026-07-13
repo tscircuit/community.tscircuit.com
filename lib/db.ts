@@ -21,6 +21,7 @@ export interface CommunityEnv {
   ADMIN_SYNC_SECRET?: string;
   MAX_THREADS_PER_SYNC?: string;
   SYNC_INTERVAL_MINUTES?: string;
+  THREAD_MAX_AGE_DAYS?: string;
 }
 
 const schemaStatements = [

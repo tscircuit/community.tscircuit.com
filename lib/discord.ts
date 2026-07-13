@@ -86,6 +86,13 @@ function snowflakeDate(id: string): string {
   }
 }
 
+function isRecentArchivedThread(thread: DiscordChannel, cutoffMs: number): boolean {
+  const activity =
+    thread.last_message_id ? snowflakeDate(thread.last_message_id) :
+    thread.thread_metadata?.archive_timestamp ?? snowflakeDate(thread.id);
+  return new Date(activity).getTime() >= cutoffMs;
+}
+
 async function discordFetch<T>(
   path: string,
   token: string,
@@ -332,6 +339,11 @@ export async function syncDiscord(
       token,
     );
     const discovered = new Map<string, DiscordChannel>();
+    const parsedMaxAge = Number.parseInt(env.THREAD_MAX_AGE_DAYS ?? "30", 10);
+    const maxAgeDays = Number.isFinite(parsedMaxAge)
+      ? Math.min(365, Math.max(1, parsedMaxAge))
+      : 30;
+    const archivedCutoffMs = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
 
     for (const thread of activeResponse.threads) {
       if (thread.parent_id && sourceSet.has(thread.parent_id)) discovered.set(thread.id, thread);
@@ -344,7 +356,11 @@ export async function syncDiscord(
         "/channels/" + parentId + "/threads/archived/public?limit=100",
         token,
       );
-      for (const thread of archived.threads) discovered.set(thread.id, thread);
+      for (const thread of archived.threads) {
+        if (isRecentArchivedThread(thread, archivedCutoffMs)) {
+          discovered.set(thread.id, thread);
+        }
+      }
     }
 
     const shouldPost = env.DISCORD_POST_BACKLINKS?.toLowerCase() === "true";
