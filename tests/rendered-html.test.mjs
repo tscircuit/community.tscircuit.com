@@ -24,19 +24,27 @@ test("ships the searchable community index instead of the starter", async () => 
 });
 
 test("includes durable indexing and automatic Discord refresh", async () => {
-  const [hosting, worker, discord, migration] = await Promise.all([
+  const [hosting, worker, discord, migration, llms, rawThread] = await Promise.all([
     readFile(new URL(".openai/hosting.json", root), "utf8"),
     readFile(new URL("worker/index.ts", root), "utf8"),
     readFile(new URL("lib/discord.ts", root), "utf8"),
     readFile(new URL("drizzle/0000_abnormal_sabra.sql", root), "utf8"),
+    readFile(new URL("app/llms.txt/route.ts", root), "utf8"),
+    readFile(new URL("app/thread/[id]/raw/route.ts", root), "utf8"),
   ]);
 
   assert.match(hosting, /"d1": "DB"/);
   assert.match(worker, /scheduled/);
-  assert.match(worker, /isSyncDue\(env\.DB, 30\)/);
+  assert.match(worker, /getSyncIntervalMinutes/);
+  assert.match(worker, /stale-while-revalidate/);
   assert.match(worker, /\/api\/sync/);
   assert.match(discord, /threads\/archived\/public/);
   assert.match(discord, /messages\?limit=100/);
+  assert.match(discord, /AnswerOverflow/);
+  assert.match(discord, /postBacklink/);
+  assert.match(discord, /DISCORD_SOURCE_CHANNEL_NAMES/);
+  assert.match(llms, /Server-rendered discussions/);
+  assert.match(rawThread, /text\/plain/);
   assert.match(migration, /CREATE TABLE .threads./);
   assert.match(migration, /CREATE TABLE .messages./);
 });

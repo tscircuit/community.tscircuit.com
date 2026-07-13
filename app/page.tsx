@@ -177,8 +177,8 @@ export default async function Home({
           <div className="syncLine">
             <span className={data.configuration === "connected" ? "syncDot connected" : "syncDot"} />
             {data.lastSync
-              ? "Index refreshed " + relativeTime(data.lastSync) + " · checks every 30 minutes"
-              : "Waiting for the first Discord sync · checks every 30 minutes"}
+              ? "Index refreshed " + relativeTime(data.lastSync) + " · checks every 15 minutes"
+              : "Waiting for the first Discord sync · checks every 15 minutes"}
           </div>
         </div>
       </section>

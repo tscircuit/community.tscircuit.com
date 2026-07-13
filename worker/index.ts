@@ -2,7 +2,7 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { ensureSchema } from "../lib/db";
-import { isSyncDue, syncDiscord } from "../lib/discord";
+import { getSyncIntervalMinutes, isSyncDue, syncDiscord } from "../lib/discord";
 import type { CommunityEnv } from "../lib/db";
 
 interface ExecutionContext {
@@ -32,9 +32,7 @@ const worker = {
     }
 
     if (url.pathname === "/api/sync") {
-      const supplied =
-        request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
-        url.searchParams.get("secret");
+      const supplied = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
       if (!env.ADMIN_SYNC_SECRET || supplied !== env.ADMIN_SYNC_SECRET) {
         return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
       }
@@ -46,12 +44,32 @@ const worker = {
       ctx.waitUntil(
         (async () => {
           await ensureSchema(env.DB);
-          if (await isSyncDue(env.DB, 30)) await syncDiscord(env);
+          if (await isSyncDue(env.DB, getSyncIntervalMinutes(env))) await syncDiscord(env);
         })(),
       );
     }
 
-    return handler.fetch(request, env, ctx);
+    const response = await handler.fetch(request, env, ctx);
+    if (
+      url.pathname === "/" ||
+      url.pathname.startsWith("/thread/") ||
+      url.pathname === "/llms.txt" ||
+      url.pathname === "/robots.txt" ||
+      url.pathname === "/sitemap.xml"
+    ) {
+      const headers = new Headers(response.headers);
+      headers.set(
+        "cache-control",
+        "public, max-age=300, s-maxage=900, stale-while-revalidate=86400",
+      );
+      headers.set("x-robots-tag", "all");
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+    return response;
   },
   async scheduled(
     _controller: ScheduledController,

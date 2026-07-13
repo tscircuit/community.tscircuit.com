@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getThread } from "../../../lib/community";
-import { parseJsonList, relativeTime } from "../../../lib/db";
+import { getPublicSiteUrl, parseJsonList, relativeTime } from "../../../lib/db";
 
 function avatarInitial(name: string) {
   return name.slice(0, 1).toUpperCase();
@@ -16,9 +16,24 @@ export async function generateMetadata({
   const { id } = await params;
   const { thread } = await getThread(id);
   if (!thread) return { title: "Discussion not found" };
+  const canonical = getPublicSiteUrl() + "/thread/" + id;
   return {
     title: thread.title + " · tscircuit Community",
     description: thread.excerpt,
+    alternates: {
+      canonical,
+      types: {
+        "text/plain": canonical + "/raw",
+      },
+    },
+    openGraph: {
+      type: "article",
+      title: thread.title,
+      description: thread.excerpt,
+      url: canonical,
+      publishedTime: thread.created_at,
+      modifiedTime: thread.last_activity_at,
+    },
   };
 }
 
@@ -31,9 +46,36 @@ export default async function ThreadPage({
   const { thread, messages } = await getThread(id);
   if (!thread) notFound();
   const tags = parseJsonList(thread.tags_json);
+  const canonical = getPublicSiteUrl() + "/thread/" + id;
+  const structuredData = {
+    "@context": "https://schema.org",
+    "@type": "DiscussionForumPosting",
+    headline: thread.title,
+    articleBody: thread.excerpt,
+    datePublished: thread.created_at,
+    dateModified: thread.last_activity_at,
+    url: canonical,
+    discussionUrl: thread.discord_url,
+    commentCount: messages.length,
+    author: {
+      "@type": "Person",
+      name: thread.creator_name,
+    },
+    isPartOf: {
+      "@type": "WebSite",
+      name: "tscircuit Community Index",
+      url: getPublicSiteUrl(),
+    },
+  };
 
   return (
     <main className="detailPage">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(structuredData).replace(/</g, "\\u003c"),
+        }}
+      />
       <header className="siteHeader">
         <Link className="brand" href="/">
           <span className="brandMark" aria-hidden="true"><i /><i /><i /></span>
@@ -68,7 +110,10 @@ export default async function ThreadPage({
         <section className="conversation" aria-label="Discussion messages">
           <div className="conversationHeader">
             <h2>Discussion</h2>
-            <span>Last active {relativeTime(thread.last_activity_at)}</span>
+            <span>
+              Last active {relativeTime(thread.last_activity_at)} ·{" "}
+              <Link href={"/thread/" + id + "/raw"}>plain text</Link>
+            </span>
           </div>
           {messages.map((message, index) => {
             let attachments: Array<{ id: string; filename: string; url: string }> = [];

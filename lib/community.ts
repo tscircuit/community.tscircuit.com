@@ -132,3 +132,30 @@ export async function getThread(id: string): Promise<{
   ]);
   return { thread: thread ?? null, messages: messages.results };
 }
+
+export async function getPublicIndexEntries(
+  limit = 1000,
+): Promise<Array<{
+  id: string;
+  title: string;
+  excerpt: string;
+  parent_name: string;
+  last_activity_at: string;
+}>> {
+  const db = getBinding();
+  await ensureSchema(db);
+  const safeLimit = Math.min(5000, Math.max(1, Math.trunc(limit)));
+  const result = await db
+    .prepare(
+      "SELECT id, title, excerpt, parent_name, last_activity_at FROM threads ORDER BY last_activity_at DESC LIMIT ?",
+    )
+    .bind(safeLimit)
+    .all<{
+      id: string;
+      title: string;
+      excerpt: string;
+      parent_name: string;
+      last_activity_at: string;
+    }>();
+  return result.results;
+}

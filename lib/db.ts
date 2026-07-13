@@ -13,9 +13,14 @@ export interface CommunityEnv {
   DISCORD_BOT_TOKEN?: string;
   DISCORD_GUILD_ID?: string;
   DISCORD_SOURCE_CHANNEL_IDS?: string;
+  DISCORD_SOURCE_CHANNEL_NAMES?: string;
+  DISCORD_IGNORED_AUTHORS?: string;
+  DISCORD_POST_BACKLINKS?: string;
   DISCORD_INVITE_URL?: string;
+  PUBLIC_SITE_URL?: string;
   ADMIN_SYNC_SECRET?: string;
   MAX_THREADS_PER_SYNC?: string;
+  SYNC_INTERVAL_MINUTES?: string;
 }
 
 const schemaStatements = [
@@ -33,6 +38,13 @@ export function getBinding(): D1Database {
   const binding = (env as unknown as CommunityEnv).DB;
   if (!binding) throw new Error("The community database is not available.");
   return binding;
+}
+
+export function getPublicSiteUrl(): string {
+  return (
+    (env as unknown as CommunityEnv).PUBLIC_SITE_URL?.replace(/\/+$/, "") ??
+    "https://tscircuit-community-index.seveibar.chatgpt.site"
+  );
 }
 
 export async function ensureSchema(db: D1Database): Promise<void> {

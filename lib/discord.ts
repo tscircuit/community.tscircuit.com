@@ -20,16 +20,26 @@ interface DiscordChannel {
   };
 }
 
+interface DiscordUser {
+  id: string;
+  username: string;
+  global_name?: string | null;
+}
+
+interface DiscordGuild {
+  id: string;
+  name: string;
+}
+
 interface DiscordMessage {
   id: string;
   content: string;
   timestamp: string;
   edited_timestamp?: string | null;
-  author: {
-    id: string;
-    username: string;
-    global_name?: string | null;
+  webhook_id?: string;
+  author: DiscordUser & {
     avatar?: string | null;
+    bot?: boolean;
   };
   attachments?: Array<{
     id: string;
@@ -49,6 +59,7 @@ export interface SyncResult {
   configured: boolean;
   indexed: number;
   discovered: number;
+  backlinks: number;
   message?: string;
 }
 
@@ -75,12 +86,19 @@ function snowflakeDate(id: string): string {
   }
 }
 
-async function discordFetch<T>(path: string, token: string): Promise<T> {
+async function discordFetch<T>(
+  path: string,
+  token: string,
+  init: RequestInit = {},
+): Promise<T> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const response = await fetch(DISCORD_API + path, {
+      ...init,
       headers: {
         authorization: "Bot " + token,
-        "user-agent": "tscircuit-community-index/1.0",
+        "content-type": "application/json",
+        "user-agent": "tscircuit-community-index/2.0",
+        ...(init.headers ?? {}),
       },
     });
 
@@ -100,21 +118,49 @@ async function discordFetch<T>(path: string, token: string): Promise<T> {
       );
     }
 
-    return (await response.json()) as T;
+    const body = await response.text();
+    return (body ? JSON.parse(body) : undefined) as T;
   }
 
   throw new Error("Discord API rate limit did not clear.");
 }
 
-function selectedParentIds(channels: DiscordChannel[], configuredIds?: string): string[] {
-  const explicit = configuredIds
+function splitSetting(value: string | undefined, defaults: string[] = []): string[] {
+  const values = value
     ?.split(",")
-    .map((value) => value.trim())
+    .map((item) => item.trim())
     .filter(Boolean);
-  if (explicit?.length) return explicit;
+  return values?.length ? values : defaults;
+}
+
+function selectedParentIds(
+  channels: DiscordChannel[],
+  configuredIds?: string,
+  configuredNames?: string,
+): string[] {
+  const explicit = splitSetting(configuredIds);
+  if (explicit.length) return explicit;
+
+  const nameFragments = splitSetting(configuredNames, ["support", "contributor"])
+    .map((name) => name.toLowerCase());
   return channels
-    .filter((channel) => channel.type === 0 || channel.type === 5 || channel.type === 15)
+    .filter((channel) => {
+      if (![0, 5, 15].includes(channel.type)) return false;
+      const name = channel.name?.toLowerCase() ?? "";
+      return nameFragments.some((fragment) => name.includes(fragment));
+    })
     .map((channel) => channel.id);
+}
+
+function shouldIgnoreMessage(
+  message: DiscordMessage,
+  ignoredNames: string[],
+  currentBotId: string,
+): boolean {
+  if (message.author.id === currentBotId) return true;
+  const names = [message.author.username, message.author.global_name ?? ""]
+    .map((name) => name.toLowerCase());
+  return ignoredNames.some((ignored) => names.some((name) => name.includes(ignored)));
 }
 
 async function setState(db: D1Database, key: string, value: string): Promise<void> {
@@ -127,13 +173,92 @@ async function setState(db: D1Database, key: string, value: string): Promise<voi
     .run();
 }
 
-export async function isSyncDue(db: D1Database, minutes = 30): Promise<boolean> {
+async function resolveGuildId(
+  token: string,
+  configuredGuildId?: string,
+): Promise<{ guildId: string; bot: DiscordUser }> {
+  const [bot, guilds] = await Promise.all([
+    discordFetch<DiscordUser>("/users/@me", token),
+    discordFetch<DiscordGuild[]>("/users/@me/guilds", token),
+  ]);
+  const configured = configuredGuildId?.trim();
+
+  if (configured) {
+    if (!guilds.some((guild) => guild.id === configured)) {
+      throw new Error("The bot is not installed in the configured Discord server.");
+    }
+    return { guildId: configured, bot };
+  }
+
+  if (guilds.length === 0) {
+    throw new Error("The bot is not installed in any Discord server yet.");
+  }
+  if (guilds.length > 1) {
+    throw new Error("The bot is installed in multiple servers; set DISCORD_GUILD_ID explicitly.");
+  }
+  return { guildId: guilds[0].id, bot };
+}
+
+export function getSyncIntervalMinutes(env: CommunityEnv): number {
+  const parsed = Number.parseInt(env.SYNC_INTERVAL_MINUTES ?? "15", 10);
+  return Number.isFinite(parsed) ? Math.min(60, Math.max(5, parsed)) : 15;
+}
+
+export async function isSyncDue(db: D1Database, minutes = 15): Promise<boolean> {
   await ensureSchema(db);
   const row = await db
     .prepare("SELECT value FROM sync_state WHERE key = 'last_success'")
     .first<{ value: string }>();
   if (!row?.value) return true;
   return Date.now() - new Date(row.value).getTime() >= minutes * 60 * 1000;
+}
+
+async function postBacklink(args: {
+  db: D1Database;
+  token: string;
+  thread: DiscordChannel;
+  siteUrl: string;
+  existingMessages: DiscordMessage[];
+  botId: string;
+}): Promise<string | null> {
+  const { db, token, thread, siteUrl, existingMessages, botId } = args;
+  const stateKey = "backlink:" + thread.id;
+  const existingState = await db
+    .prepare("SELECT value FROM sync_state WHERE key = ?")
+    .bind(stateKey)
+    .first<{ value: string }>();
+  if (existingState?.value) return null;
+
+  const pageUrl = siteUrl.replace(/\/+$/, "") + "/thread/" + thread.id;
+  const existingPost = existingMessages.find(
+    (message) => message.author.id === botId && message.content.includes(pageUrl),
+  );
+  if (existingPost) {
+    await setState(db, stateKey, existingPost.id);
+    return null;
+  }
+
+  const posted = await discordFetch<DiscordMessage>(
+    "/channels/" + thread.id + "/messages",
+    token,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        content:
+          "This conversation is indexed at " +
+          pageUrl +
+          "\n\nThe page is server-rendered and refreshed regularly for search and AI tools.",
+        allowed_mentions: { parse: [] },
+        flags: 4096,
+      }),
+    },
+  );
+  await setState(db, stateKey, posted.id);
+  await db
+    .prepare("UPDATE threads SET last_message_id = ? WHERE id = ?")
+    .bind(posted.id, thread.id)
+    .run();
+  return posted.id;
 }
 
 export async function syncDiscord(
@@ -144,20 +269,27 @@ export async function syncDiscord(
   await ensureSchema(db);
 
   const token = env.DISCORD_BOT_TOKEN?.trim();
-  const guildId = env.DISCORD_GUILD_ID?.trim();
-  if (!token || !guildId) {
+  if (!token) {
     await setState(db, "configuration", "needed");
     return {
       ok: false,
       configured: false,
       indexed: 0,
       discovered: 0,
+      backlinks: 0,
       message: "Discord connection has not been configured yet.",
     };
   }
 
-  if (!options.force && !(await isSyncDue(db))) {
-    return { ok: true, configured: true, indexed: 0, discovered: 0, message: "Index is fresh." };
+  if (!options.force && !(await isSyncDue(db, getSyncIntervalMinutes(env)))) {
+    return {
+      ok: true,
+      configured: true,
+      indexed: 0,
+      discovered: 0,
+      backlinks: 0,
+      message: "Index is fresh.",
+    };
   }
 
   const recentAttempt = await db
@@ -168,15 +300,31 @@ export async function syncDiscord(
     recentAttempt?.value &&
     Date.now() - new Date(recentAttempt.value).getTime() < 4 * 60 * 1000
   ) {
-    return { ok: true, configured: true, indexed: 0, discovered: 0, message: "A refresh is already underway." };
+    return {
+      ok: true,
+      configured: true,
+      indexed: 0,
+      discovered: 0,
+      backlinks: 0,
+      message: "A refresh is already underway.",
+    };
   }
 
   await setState(db, "last_attempt", new Date().toISOString());
   await setState(db, "status", "syncing");
 
   try {
+    const { guildId, bot } = await resolveGuildId(token, env.DISCORD_GUILD_ID);
     const channels = await discordFetch<DiscordChannel[]>("/guilds/" + guildId + "/channels", token);
-    const sourceIds = selectedParentIds(channels, env.DISCORD_SOURCE_CHANNEL_IDS);
+    const sourceIds = selectedParentIds(
+      channels,
+      env.DISCORD_SOURCE_CHANNEL_IDS,
+      env.DISCORD_SOURCE_CHANNEL_NAMES,
+    );
+    if (!sourceIds.length) {
+      throw new Error("No visible support or contributor channels matched the index configuration.");
+    }
+
     const sourceSet = new Set(sourceIds);
     const sourceMap = new Map(channels.map((channel) => [channel.id, channel]));
     const activeResponse = await discordFetch<{ threads: DiscordChannel[] }>(
@@ -199,46 +347,80 @@ export async function syncDiscord(
       for (const thread of archived.threads) discovered.set(thread.id, thread);
     }
 
-    const existingRows = await db
-      .prepare("SELECT id, last_message_id FROM threads")
-      .all<{ id: string; last_message_id: string | null }>();
+    const shouldPost = env.DISCORD_POST_BACKLINKS?.toLowerCase() === "true";
+    const [existingRows, backlinkRows] = await Promise.all([
+      db
+        .prepare("SELECT id, last_message_id FROM threads")
+        .all<{ id: string; last_message_id: string | null }>(),
+      db
+        .prepare("SELECT key FROM sync_state WHERE key LIKE 'backlink:%'")
+        .all<{ key: string }>(),
+    ]);
     const existing = new Map(existingRows.results.map((row) => [row.id, row.last_message_id]));
+    const linked = new Set(
+      backlinkRows.results.map((row) => row.key.slice("backlink:".length)),
+    );
     const candidates = [...discovered.values()]
-      .filter((thread) => !existing.has(thread.id) || existing.get(thread.id) !== thread.last_message_id)
+      .filter(
+        (thread) =>
+          !existing.has(thread.id) ||
+          existing.get(thread.id) !== thread.last_message_id ||
+          (shouldPost && !thread.thread_metadata?.archived && !linked.has(thread.id)),
+      )
       .sort((a, b) => (b.last_message_id ?? b.id).localeCompare(a.last_message_id ?? a.id));
-    const parsedLimit = Number.parseInt(env.MAX_THREADS_PER_SYNC ?? "24", 10);
-    const maxThreads = Number.isFinite(parsedLimit) ? Math.min(48, Math.max(1, parsedLimit)) : 24;
+    const parsedLimit = Number.parseInt(env.MAX_THREADS_PER_SYNC ?? "48", 10);
+    const maxThreads = Number.isFinite(parsedLimit) ? Math.min(48, Math.max(1, parsedLimit)) : 48;
     const selected = candidates.slice(0, maxThreads);
+    const ignoredNames = splitSetting(env.DISCORD_IGNORED_AUTHORS, ["AnswerOverflow"])
+      .map((name) => name.toLowerCase());
+    const siteUrl =
+      env.PUBLIC_SITE_URL?.replace(/\/+$/, "") ??
+      "https://tscircuit-community-index.seveibar.chatgpt.site";
     let indexed = 0;
+    let backlinks = 0;
 
     for (const thread of selected) {
       if (!thread.parent_id) continue;
-      const messages = await discordFetch<DiscordMessage[]>(
+      const rawMessages = await discordFetch<DiscordMessage[]>(
         "/channels/" + thread.id + "/messages?limit=100",
         token,
       );
-      const chronological = [...messages].reverse();
+      const chronological = [...rawMessages]
+        .reverse()
+        .filter((message) => !shouldIgnoreMessage(message, ignoredNames, bot.id));
+
+      if (!chronological.length) {
+        await db.prepare("DELETE FROM threads WHERE id = ?").bind(thread.id).run();
+        continue;
+      }
+
       const starter = chronological[0];
+      const newest = chronological[chronological.length - 1];
       const parent = sourceMap.get(thread.parent_id);
       const tagNames = (thread.applied_tags ?? [])
         .map((tagId) => parent?.available_tags?.find((tag) => tag.id === tagId)?.name)
         .filter((name): name is string => Boolean(name));
-      const createdAt =
-        thread.thread_metadata?.create_timestamp ?? snowflakeDate(thread.id);
+      const createdAt = thread.thread_metadata?.create_timestamp ?? snowflakeDate(thread.id);
       const lastActivityAt =
-        messages[0]?.timestamp ??
+        newest?.timestamp ??
         thread.thread_metadata?.archive_timestamp ??
         createdAt;
       const contentText = chronological
         .map((message) => stripDiscordMarkdown(message.content))
         .filter(Boolean)
         .join(" ");
-      const excerpt = stripDiscordMarkdown(starter?.content ?? contentText).slice(0, 280);
-      const searchText = ((thread.name ?? "Untitled discussion") + " " + tagNames.join(" ") + " " + contentText)
+      const excerpt = stripDiscordMarkdown(starter.content || contentText).slice(0, 280);
+      const searchText = (
+        (thread.name ?? "Untitled discussion") +
+        " " +
+        tagNames.join(" ") +
+        " " +
+        contentText
+      )
         .slice(0, 30000)
         .toLowerCase();
       const creatorName =
-        starter?.author.global_name || starter?.author.username || "Community member";
+        starter.author.global_name || starter.author.username || "Community member";
       const now = new Date().toISOString();
 
       await db
@@ -251,15 +433,15 @@ export async function syncDiscord(
           thread.parent_id,
           parent?.name ?? "Community",
           thread.name ?? "Untitled discussion",
-          thread.owner_id ?? starter?.author.id ?? null,
+          thread.owner_id ?? starter.author.id,
           creatorName,
-          starter ? avatarUrl(starter) : null,
+          avatarUrl(starter),
           createdAt,
           lastActivityAt,
-          thread.last_message_id ?? messages[0]?.id ?? null,
+          thread.last_message_id ?? newest.id,
           thread.thread_metadata?.archived ? 1 : 0,
           thread.thread_metadata?.locked ? 1 : 0,
-          thread.total_message_sent ?? thread.message_count ?? messages.length,
+          chronological.length,
           JSON.stringify(tagNames),
           excerpt,
           searchText,
@@ -268,40 +450,79 @@ export async function syncDiscord(
         )
         .run();
 
-      if (chronological.length) {
-        await db.batch(
-          chronological.map((message) =>
-            db
-              .prepare(
-                "INSERT INTO messages (id, thread_id, author_id, author_name, author_avatar, content, created_at, edited_at, attachments_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET author_name = excluded.author_name, author_avatar = excluded.author_avatar, content = excluded.content, edited_at = excluded.edited_at, attachments_json = excluded.attachments_json",
-              )
-              .bind(
-                message.id,
-                thread.id,
-                message.author.id,
-                message.author.global_name || message.author.username,
-                avatarUrl(message),
-                message.content,
-                message.timestamp,
-                message.edited_timestamp ?? null,
-                JSON.stringify(message.attachments ?? []),
-              ),
-          ),
-        );
-      }
+      await db.prepare("DELETE FROM messages WHERE thread_id = ?").bind(thread.id).run();
+      await db.batch(
+        chronological.map((message) =>
+          db
+            .prepare(
+              "INSERT INTO messages (id, thread_id, author_id, author_name, author_avatar, content, created_at, edited_at, attachments_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(
+              message.id,
+              thread.id,
+              message.author.id,
+              message.author.global_name || message.author.username,
+              avatarUrl(message),
+              message.content,
+              message.timestamp,
+              message.edited_timestamp ?? null,
+              JSON.stringify(message.attachments ?? []),
+            ),
+        ),
+      );
       indexed += 1;
+
+      if (
+        shouldPost &&
+        !thread.thread_metadata?.archived &&
+        !thread.thread_metadata?.locked
+      ) {
+        try {
+          const posted = await postBacklink({
+            db,
+            token,
+            thread,
+            siteUrl,
+            existingMessages: rawMessages,
+            botId: bot.id,
+          });
+          if (posted) backlinks += 1;
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "Unknown backlink error";
+          await setState(db, "backlink_error:" + thread.id, detail.slice(0, 500));
+        }
+      }
     }
 
     const completedAt = new Date().toISOString();
     await setState(db, "last_success", completedAt);
     await setState(db, "status", "ready");
     await setState(db, "configuration", "connected");
-    await setState(db, "last_result", JSON.stringify({ indexed, discovered: discovered.size }));
-    return { ok: true, configured: true, indexed, discovered: discovered.size };
+    await setState(db, "guild_id", guildId);
+    await setState(db, "source_channel_ids", sourceIds.join(","));
+    await setState(
+      db,
+      "last_result",
+      JSON.stringify({ indexed, discovered: discovered.size, backlinks }),
+    );
+    return {
+      ok: true,
+      configured: true,
+      indexed,
+      discovered: discovered.size,
+      backlinks,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown Discord sync error";
     await setState(db, "status", "error");
     await setState(db, "last_error", message.slice(0, 500));
-    return { ok: false, configured: true, indexed: 0, discovered: 0, message };
+    return {
+      ok: false,
+      configured: true,
+      indexed: 0,
+      discovered: 0,
+      backlinks: 0,
+      message,
+    };
   }
 }
