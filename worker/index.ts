@@ -20,6 +20,18 @@ const worker = {
   async fetch(request: Request, env: CommunityEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    const mediaMatch = /^\/media\/(\d+)$/.exec(url.pathname);
+    if (mediaMatch) {
+      const object = await env.MEDIA?.get("discord-attachments/" + mediaMatch[1]);
+      if (!object) return new Response("Image not found.", { status: 404 });
+      const headers = new Headers();
+      object.writeHttpMetadata(headers);
+      headers.set("cache-control", "public, max-age=31536000, immutable");
+      headers.set("etag", object.httpEtag);
+      headers.set("x-content-type-options", "nosniff");
+      return new Response(object.body, { headers });
+    }
+
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
       return handleImageOptimization(request, {

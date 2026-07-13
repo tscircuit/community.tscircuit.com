@@ -1,4 +1,9 @@
-import { ensureSchema, stripDiscordMarkdown, type CommunityEnv } from "./db";
+import {
+  ensureSchema,
+  stripDiscordMarkdown,
+  type CommunityEnv,
+  type R2BucketBinding,
+} from "./db";
 
 interface DiscordChannel {
   id: string;
@@ -52,6 +57,8 @@ interface DiscordMessage {
     filename: string;
     url: string;
     content_type?: string;
+    size?: number;
+    stored?: boolean;
   }>;
 }
 
@@ -71,7 +78,75 @@ export interface SyncResult {
 
 const DISCORD_API = "https://discord.com/api/v10";
 const DISCORD_EPOCH = 1420070400000n;
-const CONTENT_FORMAT_STATE_PREFIX = "content:v3:";
+const CONTENT_FORMAT_STATE_PREFIX = "content:v4:";
+const IMAGE_CONTENT_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+function inferredImageContentType(filename: string): string | null {
+  const extension = filename.toLowerCase().split(".").pop();
+  if (extension === "avif") return "image/avif";
+  if (extension === "gif") return "image/gif";
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+  if (extension === "png") return "image/png";
+  if (extension === "webp") return "image/webp";
+  return null;
+}
+
+async function storeImageAttachments(
+  attachments: NonNullable<DiscordMessage["attachments"]>,
+  bucket?: R2BucketBinding,
+): Promise<NonNullable<DiscordMessage["attachments"]>> {
+  if (!bucket) return attachments;
+
+  return Promise.all(
+    attachments.map(async (attachment) => {
+      const declaredType = attachment.content_type?.split(";", 1)[0].toLowerCase();
+      const inferredType = inferredImageContentType(attachment.filename);
+      if (!(declaredType && IMAGE_CONTENT_TYPES.has(declaredType)) && !inferredType) {
+        return attachment;
+      }
+      if (attachment.size && attachment.size > 25 * 1024 * 1024) return attachment;
+
+      const key = "discord-attachments/" + attachment.id;
+      try {
+        const existing = await bucket.head(key);
+        if (!existing) {
+          const response = await fetch(attachment.url, {
+            headers: { "user-agent": "tscircuit-community-index/2.0" },
+          });
+          if (!response.ok || !response.body) return attachment;
+          const responseType = response.headers.get("content-type")?.split(";", 1)[0].toLowerCase();
+          const contentType =
+            responseType && IMAGE_CONTENT_TYPES.has(responseType)
+              ? responseType
+              : declaredType && IMAGE_CONTENT_TYPES.has(declaredType)
+                ? declaredType
+                : inferredType;
+          if (!contentType) return attachment;
+          const contentLength = Number(response.headers.get("content-length") ?? attachment.size ?? 0);
+          if (contentLength > 25 * 1024 * 1024) return attachment;
+          await bucket.put(key, response.body, {
+            httpMetadata: { contentType },
+            customMetadata: { filename: attachment.filename },
+          });
+        }
+        return {
+          ...attachment,
+          url: "/media/" + attachment.id,
+          content_type: declaredType ?? inferredType ?? undefined,
+          stored: true,
+        };
+      } catch {
+        return attachment;
+      }
+    }),
+  );
+}
 
 function avatarUrl(message: DiscordMessage): string | null {
   if (!message.author.avatar) return null;
@@ -476,6 +551,15 @@ export async function syncDiscord(
       const chronological = [...messageMap.values()]
         .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
         .filter((message) => !shouldIgnoreMessage(message, ignoredNames, bot.id));
+
+      await Promise.all(
+        chronological.map(async (message) => {
+          message.attachments = await storeImageAttachments(
+            message.attachments ?? [],
+            env.MEDIA,
+          );
+        }),
+      );
 
       if (!chronological.length) {
         await db.prepare("DELETE FROM threads WHERE id = ?").bind(thread.id).run();

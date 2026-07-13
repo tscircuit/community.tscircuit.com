@@ -207,7 +207,11 @@ footer a:hover { color: var(--violet); }
 .starterBadge { padding: 3px 6px; border-radius: 4px; background: #e7e3ff; color: var(--violet-dark); font: 600 8px var(--font-geist-mono), monospace; text-transform: uppercase; letter-spacing: 0.06em; }
 .messageContent { margin-top: 8px; color: #454453; font-size: 14px; line-height: 1.62; white-space: pre-wrap; overflow-wrap: anywhere; }
 .attachments { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
-.attachments a { padding: 8px 10px; border-radius: 7px; background: #edeafd; color: var(--violet-dark); font: 560 10px var(--font-geist-mono), monospace; }
+.attachments a { color: var(--violet-dark); font: 560 10px var(--font-geist-mono), monospace; }
+.attachmentFile { padding: 8px 10px; border-radius: 7px; background: #edeafd; }
+.attachmentImage { display: grid; gap: 6px; width: min(100%, 680px); }
+.attachmentImage img { display: block; width: auto; max-width: 100%; max-height: 620px; border: 1px solid var(--line); border-radius: 10px; background: #f7f6fb; object-fit: contain; }
+.attachmentImage span { overflow-wrap: anywhere; }
 .emptyConversation { padding: 45px; border: 1px dashed var(--line); border-radius: 12px; text-align: center; color: var(--muted); }
 .discordCta { margin-top: 24px; padding: 20px 22px; border-radius: 12px; background: var(--ink); color: white; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .discordCta p { margin: 0 0 4px; font-weight: 700; }

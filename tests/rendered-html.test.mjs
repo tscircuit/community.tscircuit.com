@@ -35,6 +35,7 @@ test("includes durable indexing and automatic Discord refresh", async () => {
   ]);
 
   assert.match(hosting, /"d1": "DB"/);
+  assert.match(hosting, /"r2": "MEDIA"/);
   assert.match(worker, /scheduled/);
   assert.match(worker, /getSyncIntervalMinutes/);
   assert.match(worker, /stale-while-revalidate/);
@@ -46,7 +47,10 @@ test("includes durable indexing and automatic Discord refresh", async () => {
   assert.match(discord, /DISCORD_SOURCE_CHANNEL_NAMES/);
   assert.match(discord, /THREAD_MAX_AGE_DAYS/);
   assert.match(discord, /fetchOriginalMessage/);
-  assert.match(discord, /content:v3:/);
+  assert.match(discord, /content:v4:/);
+  assert.match(discord, /storeImageAttachments/);
+  assert.match(worker, /discord-attachments/);
+  assert.match(threadPage, /attachmentImage/);
   assert.match(threadPage, /original post/);
   assert.match(llms, /Server-rendered discussions/);
   assert.match(rawThread, /text\/plain/);

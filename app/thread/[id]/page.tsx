@@ -116,7 +116,13 @@ export default async function ThreadPage({
             </span>
           </div>
           {messages.map((message, index) => {
-            let attachments: Array<{ id: string; filename: string; url: string }> = [];
+            let attachments: Array<{
+              id: string;
+              filename: string;
+              url: string;
+              content_type?: string;
+              stored?: boolean;
+            }> = [];
             try { attachments = JSON.parse(message.attachments_json); } catch {}
             return (
               <article className={index === 0 ? "message starterMessage" : "message"} key={message.id}>
@@ -135,7 +141,14 @@ export default async function ThreadPage({
                   {attachments.length > 0 && (
                     <div className="attachments">
                       {attachments.map((attachment) => (
-                        <a href={attachment.url} key={attachment.id}>↗ {attachment.filename}</a>
+                        attachment.stored && attachment.content_type?.startsWith("image/") ? (
+                          <a className="attachmentImage" href={attachment.url} key={attachment.id}>
+                            <img loading="lazy" src={attachment.url} alt={attachment.filename} />
+                            <span>{attachment.filename}</span>
+                          </a>
+                        ) : (
+                          <a className="attachmentFile" href={attachment.url} key={attachment.id}>↗ {attachment.filename}</a>
+                        )
                       ))}
                     </div>
                   )}

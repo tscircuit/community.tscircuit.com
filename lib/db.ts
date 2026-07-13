@@ -1,8 +1,26 @@
 import { env } from "cloudflare:workers";
 
+export interface R2BucketBinding {
+  head(key: string): Promise<unknown | null>;
+  get(key: string): Promise<{
+    body: ReadableStream;
+    httpEtag: string;
+    writeHttpMetadata(headers: Headers): void;
+  } | null>;
+  put(
+    key: string,
+    value: ReadableStream,
+    options: {
+      httpMetadata: { contentType: string };
+      customMetadata: { filename: string };
+    },
+  ): Promise<unknown>;
+}
+
 export interface CommunityEnv {
   ASSETS: Fetcher;
   DB: D1Database;
+  MEDIA?: R2BucketBinding;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {

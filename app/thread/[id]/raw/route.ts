@@ -1,4 +1,19 @@
 import { getThread } from "../../../../lib/community";
+import { getPublicSiteUrl } from "../../../../lib/db";
+
+function attachmentLines(value: string): string[] {
+  try {
+    const attachments = JSON.parse(value) as Array<{ filename: string; url: string }>;
+    return attachments.map((attachment) => {
+      const url = attachment.url.startsWith("/")
+        ? getPublicSiteUrl() + attachment.url
+        : attachment.url;
+      return "Attachment: " + attachment.filename + " — " + url;
+    });
+  } catch {
+    return [];
+  }
+}
 
 export async function GET(
   _request: Request,
@@ -16,12 +31,16 @@ export async function GET(
     "Started: " + thread.created_at,
     "Last activity: " + thread.last_activity_at,
     "",
-    ...messages.flatMap((message) => [
-      "## " + message.author_name + " — " + message.created_at,
-      "",
-      message.content || "[attachment]",
-      "",
-    ]),
+    ...messages.flatMap((message) => {
+      const attachments = attachmentLines(message.attachments_json);
+      return [
+        "## " + message.author_name + " — " + message.created_at,
+        "",
+        message.content || (attachments.length ? "[attachment]" : ""),
+        ...attachments,
+        "",
+      ];
+    }),
   ];
   return new Response(lines.join("\n"), {
     headers: {
