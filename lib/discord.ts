@@ -71,7 +71,7 @@ export interface SyncResult {
 
 const DISCORD_API = "https://discord.com/api/v10";
 const DISCORD_EPOCH = 1420070400000n;
-const CONTENT_FORMAT_STATE_PREFIX = "content:v2:";
+const CONTENT_FORMAT_STATE_PREFIX = "content:v3:";
 
 function avatarUrl(message: DiscordMessage): string | null {
   if (!message.author.avatar) return null;
@@ -213,9 +213,13 @@ function shouldIgnoreMessage(
   currentBotId: string,
 ): boolean {
   if (message.author.id === currentBotId) return true;
+  const normalizeName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "");
   const names = [message.author.username, message.author.global_name ?? ""]
-    .map((name) => name.toLowerCase());
-  return ignoredNames.some((ignored) => names.some((name) => name.includes(ignored)));
+    .map(normalizeName);
+  return ignoredNames.some((ignored) => {
+    const normalizedIgnored = normalizeName(ignored);
+    return normalizedIgnored && names.some((name) => name.includes(normalizedIgnored));
+  });
 }
 
 async function setState(db: D1Database, key: string, value: string): Promise<void> {
