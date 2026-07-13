@@ -128,7 +128,7 @@ export default async function ThreadPage({
                 <div className="messageBody">
                   <div className="messageMeta">
                     <b>{message.author_name}</b>
-                    {index === 0 && <span className="starterBadge">thread author</span>}
+                    {index === 0 && <span className="starterBadge">original post</span>}
                     <time dateTime={message.created_at}>{new Date(message.created_at).toLocaleString("en", { dateStyle: "medium", timeStyle: "short" })}</time>
                   </div>
                   <div className="messageContent">{message.content || <i>Shared an attachment</i>}</div>

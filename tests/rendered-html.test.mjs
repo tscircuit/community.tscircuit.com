@@ -24,13 +24,14 @@ test("ships the searchable community index instead of the starter", async () => 
 });
 
 test("includes durable indexing and automatic Discord refresh", async () => {
-  const [hosting, worker, discord, migration, llms, rawThread] = await Promise.all([
+  const [hosting, worker, discord, migration, llms, rawThread, threadPage] = await Promise.all([
     readFile(new URL(".openai/hosting.json", root), "utf8"),
     readFile(new URL("worker/index.ts", root), "utf8"),
     readFile(new URL("lib/discord.ts", root), "utf8"),
     readFile(new URL("drizzle/0000_abnormal_sabra.sql", root), "utf8"),
     readFile(new URL("app/llms.txt/route.ts", root), "utf8"),
     readFile(new URL("app/thread/[id]/raw/route.ts", root), "utf8"),
+    readFile(new URL("app/thread/[id]/page.tsx", root), "utf8"),
   ]);
 
   assert.match(hosting, /"d1": "DB"/);
@@ -44,6 +45,9 @@ test("includes durable indexing and automatic Discord refresh", async () => {
   assert.match(discord, /postBacklink/);
   assert.match(discord, /DISCORD_SOURCE_CHANNEL_NAMES/);
   assert.match(discord, /THREAD_MAX_AGE_DAYS/);
+  assert.match(discord, /fetchOriginalMessage/);
+  assert.match(discord, /content:v2:/);
+  assert.match(threadPage, /original post/);
   assert.match(llms, /Server-rendered discussions/);
   assert.match(rawThread, /text\/plain/);
   assert.match(migration, /CREATE TABLE .threads./);

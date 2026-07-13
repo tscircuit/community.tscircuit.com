@@ -33,10 +33,16 @@ interface DiscordGuild {
 
 interface DiscordMessage {
   id: string;
+  type?: number;
   content: string;
   timestamp: string;
   edited_timestamp?: string | null;
   webhook_id?: string;
+  message_reference?: {
+    message_id?: string;
+    channel_id?: string;
+  };
+  referenced_message?: DiscordMessage | null;
   author: DiscordUser & {
     avatar?: string | null;
     bot?: boolean;
@@ -65,6 +71,7 @@ export interface SyncResult {
 
 const DISCORD_API = "https://discord.com/api/v10";
 const DISCORD_EPOCH = 1420070400000n;
+const CONTENT_FORMAT_STATE_PREFIX = "content:v2:";
 
 function avatarUrl(message: DiscordMessage): string | null {
   if (!message.author.avatar) return null;
@@ -130,6 +137,47 @@ async function discordFetch<T>(
   }
 
   throw new Error("Discord API rate limit did not clear.");
+}
+
+async function discordFetchOptional<T>(
+  path: string,
+  token: string,
+): Promise<T | null> {
+  try {
+    return await discordFetch<T>(path, token);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("Discord API 404")) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function fetchOriginalMessage(
+  thread: DiscordChannel,
+  token: string,
+  recentMessages: DiscordMessage[],
+): Promise<DiscordMessage | null> {
+  let starter =
+    recentMessages.find((message) => message.id === thread.id || message.type === 21) ??
+    (await discordFetchOptional<DiscordMessage>(
+      "/channels/" + thread.id + "/messages/" + thread.id,
+      token,
+    ));
+
+  if (!starter) return null;
+  if (starter.type !== 21) return starter;
+  if (starter.referenced_message) return starter.referenced_message;
+
+  const parentChannelId =
+    starter.message_reference?.channel_id ?? thread.parent_id;
+  const originalMessageId =
+    starter.message_reference?.message_id ?? thread.id;
+  if (!parentChannelId) return null;
+  return discordFetchOptional<DiscordMessage>(
+    "/channels/" + parentChannelId + "/messages/" + originalMessageId,
+    token,
+  );
 }
 
 function splitSetting(value: string | undefined, defaults: string[] = []): string[] {
@@ -364,23 +412,32 @@ export async function syncDiscord(
     }
 
     const shouldPost = env.DISCORD_POST_BACKLINKS?.toLowerCase() === "true";
-    const [existingRows, backlinkRows] = await Promise.all([
+    const [existingRows, backlinkRows, contentFormatRows] = await Promise.all([
       db
         .prepare("SELECT id, last_message_id FROM threads")
         .all<{ id: string; last_message_id: string | null }>(),
       db
         .prepare("SELECT key FROM sync_state WHERE key LIKE 'backlink:%'")
         .all<{ key: string }>(),
+      db
+        .prepare("SELECT key FROM sync_state WHERE key LIKE 'content:v2:%'")
+        .all<{ key: string }>(),
     ]);
     const existing = new Map(existingRows.results.map((row) => [row.id, row.last_message_id]));
     const linked = new Set(
       backlinkRows.results.map((row) => row.key.slice("backlink:".length)),
+    );
+    const currentFormat = new Set(
+      contentFormatRows.results.map((row) =>
+        row.key.slice(CONTENT_FORMAT_STATE_PREFIX.length),
+      ),
     );
     const candidates = [...discovered.values()]
       .filter(
         (thread) =>
           !existing.has(thread.id) ||
           existing.get(thread.id) !== thread.last_message_id ||
+          !currentFormat.has(thread.id) ||
           (shouldPost && !thread.thread_metadata?.archived && !linked.has(thread.id)),
       )
       .sort((a, b) => (b.last_message_id ?? b.id).localeCompare(a.last_message_id ?? a.id));
@@ -401,8 +458,18 @@ export async function syncDiscord(
         "/channels/" + thread.id + "/messages?limit=100",
         token,
       );
-      const chronological = [...rawMessages]
-        .reverse()
+      const originalMessage = await fetchOriginalMessage(thread, token, rawMessages);
+      const messageMap = new Map<string, DiscordMessage>();
+      for (const message of rawMessages) {
+        if (message.type === 21 && !message.content && message.referenced_message) {
+          messageMap.set(message.referenced_message.id, message.referenced_message);
+        } else if (message.type !== 21 || message.content) {
+          messageMap.set(message.id, message);
+        }
+      }
+      if (originalMessage) messageMap.set(originalMessage.id, originalMessage);
+      const chronological = [...messageMap.values()]
+        .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
         .filter((message) => !shouldIgnoreMessage(message, ignoredNames, bot.id));
 
       if (!chronological.length) {
@@ -486,6 +553,7 @@ export async function syncDiscord(
             ),
         ),
       );
+      await setState(db, CONTENT_FORMAT_STATE_PREFIX + thread.id, now);
       indexed += 1;
 
       if (
