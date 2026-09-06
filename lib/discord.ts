@@ -271,7 +271,7 @@ function selectedParentIds(
   const explicit = splitSetting(configuredIds);
   if (explicit.length) return explicit;
 
-  const nameFragments = splitSetting(configuredNames, ["support", "contributor"])
+  const nameFragments = splitSetting(configuredNames, ["support", "contributor", "designreview"])
     .map((name) => name.toLowerCase());
   return channels
     .filter((channel) => {
@@ -456,7 +456,7 @@ export async function syncDiscord(
       env.DISCORD_SOURCE_CHANNEL_NAMES,
     );
     if (!sourceIds.length) {
-      throw new Error("No visible support or contributor channels matched the index configuration.");
+      throw new Error("No visible channels matched the index configuration.");
     }
 
     const sourceSet = new Set(sourceIds);

@@ -7,7 +7,7 @@ export async function GET() {
   const lines = [
     "# tscircuit Community Index",
     "",
-    "> Server-rendered discussions from the tscircuit support and contributor Discord channels.",
+    "> Server-rendered discussions from the tscircuit support, contributor, and designreview Discord channels.",
     "",
     "The index excludes AnswerOverflow-authored content and refreshes every 15 minutes.",
     "Each discussion has an HTML page and a plain-text representation at /thread/{id}/raw.",
